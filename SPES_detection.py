@@ -32,20 +32,39 @@ def fit_sine(time_series, sampling_rate, min_freq, max_freq):
 
     return fitted_freq, phase
 
+
+def fit_exponential_curve(data):
+    x = np.array([i for i in range(len(data))])
+
+    # Define the exponential function to fit
+    def exponential_func(x, a, b, c):
+        return a * np.exp(-b * x) + c
+
+    # Fit the exponential curve
+    popt, _ = curve_fit(exponential_func, x, y)
+
+    # Generate y-values for the fitted curve
+    fitted_y = exponential_func(x, *popt)
+
+    corrected_y = y - fitted_y
+
+    return corrected_y
+
 class SPES_record():
     def __init__(self, file):
-        self.load_eeg(file)
-        self.sfreq = self.raw.info["sfreq"]
-        self.data = self.raw.get_data()
-
-    def load_eeg(self, file):
-        if file.endswith(".edf"):
+        self.file = file
+        if self.file.endswith(".edf"):
             self.raw = mne.io.read_raw_edf(file, preload=True)
-        elif file.endswith(".fif"):
-            self.raw = mne.io.read_raw_fif(file, preload=True)
+            self.sfreq = self.raw.info["sfreq"]
+            self.data = self.raw.get_data()
+            self.analyse_stimulation_events()
+        """elif self.file.endswith("_epo.fif"):
+            self.epochs = mne.read_epochs(self.file)
+            self.sfreq = self.epochs.info["sfreq"]"""
 
-    def detect_stimulation_events(self, thresholdRatio=20, windowSize=100, responseTime=2,
-                                  phaseMeasureWindow=3, lowPass = 4, highPass = 0.005):
+    def analyse_stimulation_events(self, thresholdRatio=20, saveEpochs = True,
+                                   windowSize=100, responseTime=2, phaseMeasureWindow=3,
+                                   lowPass = 4, highPass = 0.005):
         # Get the data from all the channels
         data = self.raw.get_data()
 
@@ -76,31 +95,61 @@ class SPES_record():
             quietestLeadIndices = tuple(np.sort(np.argsort(eventAvs)[:2]))
             eventLabels.append(quietestLeadIndices)
 
-            # Find the dominant frequency in the delta band,
-            # then fit a sine wave of that frequency to the data before the stim
-            # then return the phase
-
-            fitResults = np.apply_along_axis(fit_sine, axis=1, arr=data[:, int(sample - phaseMeasureWindow * self.sfreq):sample-1],
-                                                                     sampling_rate=self.sfreq, min_freq=highPass, max_freq=lowPass)
-
-            self.eventData[i] = {"sample": sample,
-                                 "stimLeads": quietestLeadIndices,
-                                 "polarity": np.sign(np.mean(data[: sample-2,sample+2])),
-                                 "responses": data[:, sample:int(sample + responseTime * self.sfreq)],
-                                 "preStimWindow": data[:, int(sample - phaseMeasureWindow * self.sfreq):sample-1],
-                                 "preStimFreq": fitResults[:, 0],
-                                 "preStimPhase": fitResults[:, 1]}
-
-
         eventLabelSet = set(eventLabels)
         self.eventLabelDict = {}
         for i, eventLabel in enumerate(eventLabelSet):
             self.eventLabelDict[i] = eventLabel
-
             # Values are a tuple containing the two leads used for stimulation
 
         keyList = [key for value in eventLabels for key, v in self.eventLabelDict.items() if v == value]
 
         # Label events in events object with keys from eventLabelDict.
         self.events[:, 2] = keyList
+        self.epochs = mne.epochs.Epochs(raw=self.raw, events=self.events)
 
+        if saveEpochs:
+            EpochSaveName = str(self.file).split(".")[0] + "_epo.fif"
+            self.epochs.save(fname=EpochSaveName, overwrite=True)
+
+        for i, event in enumerate(self.events):
+            sample = event[0]
+            window = self.data[:, sample - windowSize:sample + windowSize]
+            eventAvs = np.mean(abs(window), axis=1)
+            quietestLeadIndices = tuple(np.sort(np.argsort(eventAvs)[:2]))
+            eventLabels.append(quietestLeadIndices)
+
+            # Find the dominant frequency in the delta band,
+            # then fit a sine wave of that frequency to the data before the stim
+            # then return the phase
+
+            fitResults = np.apply_along_axis(fit_sine, axis=1,
+                                             arr=data[:, int(sample - phaseMeasureWindow * self.sfreq):sample - 1],
+                                             sampling_rate=self.sfreq, min_freq=highPass, max_freq=lowPass)
+
+            self.eventData[i] = {"sample": sample,
+                                 "stimLeads": quietestLeadIndices,
+                                 "polarity": np.sign(np.mean(data[: sample - 2, sample + 2])),
+                                 "responses": data[:, sample:int(sample + responseTime * self.sfreq)],
+                                 "preStimWindow": data[:, int(sample - phaseMeasureWindow * self.sfreq):sample - 1],
+                                 "preStimFreq": fitResults[:, 0],
+                                 "preStimPhase": fitResults[:, 1]}
+
+    def correct_stimulus_artefact(self):
+        print(self.eventData[3]["responses"][5])
+        # File path
+        file_path = 'data.csv'
+
+        np.savetxt(file_path, self.eventData[3]["responses"][5], newline=",", delimiter=',')
+
+        for i, event in enumerate(self.events):
+            leads = [self.eventData[i]["stimLeads"][0], self.eventData[i]["stimLeads"][1]]
+
+    def make_evoked_and_analyse(self):
+        self.evokeds = self.epochs.average(by_event_type=True)
+        self.evokedDict = {}
+        for i, evoked in enumerate(self.evokeds):
+            self.evokedDict[i] = {"data":evoked.data, "evoked":evoked}
+
+if __name__ == "__main__":
+    file = r"C:\Users\rohan\PycharmProjects\SPES_analysis\Testing\SPES1.edf"
+    a = SPES_record(file)
