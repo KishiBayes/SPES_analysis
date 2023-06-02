@@ -23,7 +23,7 @@ def FolderToDataframe(dir, includeWindows=False):
         resultsDict = r.eventData
         for event in resultsDict.keys():
             data = resultsDict[event]
-            eventdf = dataToDataframe(data, includeWindows=includeWindows)
+            eventdf = dataToDataframe(data, includeWindows=includeWindows, sfreq=r.sfreq)
             eventdf["event"] = event
             eventdf["file"] = file.path
             file_df = pd.concat([file_df, eventdf])
@@ -34,13 +34,16 @@ def FolderToDataframe(dir, includeWindows=False):
     folder_df.to_csv("Output.csv")
     return folder_df
 
-def dataToDataframe(data, includeWindows = False):
+def dataToDataframe(data, includeWindows = False, sfreq = 256):
     N = len(data["responses"])
     M = len(data["responses"][0])
 
     if includeWindows:
         # Create a dictionary with the desired column names and values
         df_data = {
+            "sample": [data["sample"]] * N,
+            "Bistim": [data["DoubleStim"]] * N,
+            "time": [data["sample"]] * N * sfreq,
             "stimLeads": [data["stimLeads"]] * N,
             "polarity": [data["polarity"]] * N,
             **{

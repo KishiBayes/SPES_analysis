@@ -2,7 +2,8 @@ import mne
 import numpy as np
 from scipy.fft import fft, fftfreq
 from scipy.optimize import curve_fit
-
+import matplotlib.pyplot as plt
+import tqdm
 
 def fit_sine(time_series, sampling_rate, min_freq, max_freq):
     # Compute the Fast Fourier Transform (FFT) of the time series
@@ -62,39 +63,31 @@ class SPES_record():
             self.data = self.raw.get_data()
             self.analyse_stimulation_events()
 
-    def analyse_stimulation_events(self, thresholdRatio=20, saveEpochs=False,
+    def analyse_stimulation_events(self, thresholdRatio=5, saveEpochs=False,
                                    windowSize=100, responseTime=0.2, phaseMeasureWindow=3,
-                                   lowPass=4, highPass=0.005, startOffset=0.02, proxMin=2):
+                                   lowPass=4, highPass=0.005, startOffset=0.02, proxMin=0.5,
+                                   LastStim=False, bistimDelayMax=2):
         # Get the data from all the channels
         data = self.raw.get_data()
 
-        # Compute the sum of all channels along the channel axis
-        sum_data_OneD = np.sum(np.abs(data), axis=0)
-        sum_data = np.reshape(sum_data_OneD, (1, len(sum_data_OneD)))
+        self.n_chans = data.shape[0]
+        self.n_samples = data.shape[1]
 
-        # Apply a step function to the summed data
-        threshold = thresholdRatio*np.std(sum_data_OneD) + np.mean(sum_data_OneD)
-        sum_data_step = np.where(sum_data >= threshold, 1, 0)
-
-        if True:
-            print(np.sum(sum_data_step))
-            back_step = sum_data_step[0][::-1]
-            fixed_back_step = []
-            for index, digit in enumerate(back_step):
-                if np.sum(back_step[index:index + int(proxMin * self.sfreq)]) > 1:
-                    fixed_back_step.append(0)
-                else:
-                    fixed_back_step.append(digit)
-            back_fixed_back_step = fixed_back_step[::-1]
-            sum_data_step = np.reshape(back_fixed_back_step, (1, len(back_fixed_back_step)))
-
+        # Removal of adjacent peaks
+        #keeps first suprathreshold stim in a run - shouldn't be necessary if we compare to local averages
+        fixed_sum_data_step = []
+        for index, digit in enumerate(peaks[0]):
+            if np.sum(peaks[0][index-int(proxMin*self.sfreq):index]) > 1:
+                fixed_sum_data_step.append(0)
+            else:
+                fixed_sum_data_step.append(digit)
+        peaks = np.array(np.reshape(np.array(fixed_sum_data_step), (1, len(fixed_sum_data_step))))
 
         # Create a new info object for the summed channel
         sum_info = mne.create_info(["STI"], self.raw.info["sfreq"], ["stim"])
-        stim_raw = mne.io.RawArray(sum_data_step, info=sum_info)
+        stim_raw = mne.io.RawArray(peaks, info=sum_info, verbose=False)
         self.raw.add_channels([stim_raw], force_update_info=True)
         self.events = mne.find_events(self.raw, stim_channel=["STI"], initial_event=False)
-        self.epochs = mne.epochs.Epochs(raw=self.raw, events=self.events)
 
         self.stim_times = [x[0] / self.sfreq for x in self.events]
 
@@ -109,6 +102,7 @@ class SPES_record():
             eventLabels.append(quietestLeadIndices)
 
         eventLabelSet = set(eventLabels)
+        print(f"{eventLabelSet} different stimulation setups detected.")
         self.eventLabelDict = {}
         for i, eventLabel in enumerate(eventLabelSet):
             self.eventLabelDict[i] = eventLabel
@@ -118,7 +112,7 @@ class SPES_record():
 
         # Label events in events object with keys from eventLabelDict.
         self.events[:, 2] = keyList
-        self.epochs = mne.epochs.Epochs(raw=self.raw, events=self.events)
+        self.epochs = mne.epochs.Epochs(raw=self.raw, events=self.events, verbose=False)
 
         if saveEpochs:
             EpochSaveName = str(self.file).split(".")[0] + "_epo.fif"
@@ -156,10 +150,17 @@ class SPES_record():
                                  "earlyResponseAmp": maxima,
                                  "earlyResponseLatency": 1000 * (startOffset * self.sfreq + maximaIndex) / self.sfreq,
                                  "LikelyResponse": np.where(maximaIndex > 1, True, False)}
+        # Detect bistim.
+        for i, event in enumerate(self.events):
+            if i != 0:
+                self.eventData[i]["DoubleStim"] = self.eventData[i]["sample"]-self.eventData[i-1]["sample"] < bistimDelayMax*self.sfreq
+
+        for i, event in enumerate(self.events): # separate loop so it doesn't break it for the next guy.
+            if i<len(self.eventData.keys()):
+                if self.eventData[i]["sample"]-self.eventData[i+1]["sample"] < bistimDelayMax*self.sfreq:
+                    del(self.eventData[i])
 
 
 if __name__ == "__main__":
     file = r"C:\Users\rohan\PycharmProjects\SPES_analysis\Testing\SPES1.edf"
     a = SPES_record(file)
-    print(a.stim_times)
-
