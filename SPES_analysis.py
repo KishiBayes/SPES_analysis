@@ -63,25 +63,26 @@ class SPES_record():
             self.data = self.raw.get_data()
             self.analyse_stimulation_events()
 
-    def analyse_stimulation_events(self, thresholdRatio=5, saveEpochs=False,
-                                   windowSize=100, responseTime=0.2, phaseMeasureWindow=3,
-                                   lowPass=4, highPass=0.005, startOffset=0.02, proxMin=0.5,
-                                   LastStim=False, bistimDelayMax=2):
-        # Get the data from all the channels
+    def detect_peaks(self, method=None):
         data = self.raw.get_data()
+        from Peak_Detection import individual_peaks_mapped as ipm
+        from Peak_Detection import summed_windowed_peaks as swp
+        from Peak_Detection import summed_peaks as sp
+        if method == None:
+            return sp(data, sfreq=self.sfreq)
 
+    def analyse_stimulation_events(self, saveEpochs=False,
+                                   windowSize=100, responseTime=0.2, phaseMeasureWindow=3,
+                                   lowPass=4, highPass=0.005, startOffset=0.02, bistimDelayMax=2):
+        # Get the data from all the channels
+
+
+        data = self.raw.get_data()
         self.n_chans = data.shape[0]
         self.n_samples = data.shape[1]
 
-        # Removal of adjacent peaks
-        #keeps first suprathreshold stim in a run - shouldn't be necessary if we compare to local averages
-        fixed_sum_data_step = []
-        for index, digit in enumerate(peaks[0]):
-            if np.sum(peaks[0][index-int(proxMin*self.sfreq):index]) > 1:
-                fixed_sum_data_step.append(0)
-            else:
-                fixed_sum_data_step.append(digit)
-        peaks = np.array(np.reshape(np.array(fixed_sum_data_step), (1, len(fixed_sum_data_step))))
+
+        peaks = self.detect_peaks()
 
         # Create a new info object for the summed channel
         sum_info = mne.create_info(["STI"], self.raw.info["sfreq"], ["stim"])
@@ -98,14 +99,14 @@ class SPES_record():
             sample = event[0]
             window = data[:, sample - windowSize:sample + windowSize]
             eventAvs = np.mean(abs(window), axis=1)
-            quietestLeadIndices = tuple(np.sort(np.argsort(eventAvs)[:2]))
+            quietestLeadIndices = str(np.sort(np.argsort(eventAvs)[:2]))
             eventLabels.append(quietestLeadIndices)
 
         eventLabelSet = set(eventLabels)
         print(f"{eventLabelSet} different stimulation setups detected.")
         self.eventLabelDict = {}
         for i, eventLabel in enumerate(eventLabelSet):
-            self.eventLabelDict[i] = eventLabel
+            self.eventLabelDict[i] = str(eventLabel)
             # Values are a tuple containing the two leads used for stimulation
 
         keyList = [key for value in eventLabels for key, v in self.eventLabelDict.items() if v == value]
@@ -125,19 +126,23 @@ class SPES_record():
             quietestLeadIndices = tuple(np.sort(np.argsort(eventAvs)[:2]))
             eventLabels.append(quietestLeadIndices)
 
-            # Find the dominant frequency in the delta band,
-            # then fit a sine wave of that frequency to the data before the stim
-            # then return the phase
+            try:
+                # Find the dominant frequency in the delta band,
+                # then fit a sine wave of that frequency to the data before the stim
+                # then return the phase
 
-            fitResults = np.apply_along_axis(fit_sine, axis=1,
-                                             arr=data[:, int(sample - phaseMeasureWindow * self.sfreq):sample - 1],
-                                             sampling_rate=self.sfreq, min_freq=highPass, max_freq=lowPass)
-            maxima = np.sqrt(
-                np.max(np.square(data[:, sample:int(sample + startOffset * self.sfreq + responseTime * self.sfreq)]),
-                       axis=1))
-            maximaIndex = np.argmax(
-                np.abs(data[:, sample:int(sample + startOffset * self.sfreq + responseTime * self.sfreq)]), axis=1)
-
+                fitResults = np.apply_along_axis(fit_sine, axis=1,
+                                                 arr=data[:, int(sample - phaseMeasureWindow * self.sfreq):sample - 1],
+                                                 sampling_rate=self.sfreq, min_freq=highPass, max_freq=lowPass)
+                maxima = np.sqrt(
+                    np.max(np.square(data[:, sample:int(sample + startOffset * self.sfreq + responseTime * self.sfreq)]),
+                           axis=1))
+                maximaIndex = np.argmax(
+                    np.abs(data[:, sample:int(sample + startOffset * self.sfreq + responseTime * self.sfreq)]), axis=1)
+            except ZeroDivisionError as z:
+                print(f"Error in fitting delta sine wave at sample {sample}, {z}")
+                maxima = np.zeros((1,self.n_chans))
+                maximaIndex = np.zeros((1, self.n_chans))
             self.eventData[i] = {"sample": sample,
                                  "stimLeads": quietestLeadIndices,
                                  "polarity": np.sign(np.mean(data[: sample - 2, sample + 2])),
@@ -160,7 +165,31 @@ class SPES_record():
                 if self.eventData[i]["sample"]-self.eventData[i+1]["sample"] < bistimDelayMax*self.sfreq:
                     del(self.eventData[i])
 
+    def exportAnnotatedEdf(self, output_path):
+        annot_from_events = mne.annotations_from_events(
+            events=self.events,
+            event_desc=self.eventLabelDict,
+            sfreq=self.sfreq,
+            orig_time=self.raw.info["meas_date"],
+        )
+        self.raw.set_annotations(annot_from_events)
+
+        # Save the modified Raw object as an EDF file
+        mne.export.export_raw(output_path, raw=self.raw, overwrite=True)
+
+
+    def samplePlots(self,numberOfSamples = 6):
+        if numberOfSamples>len(self.epochs.events):
+            return KeyError
+
+        for i in range(numberOfSamples):
+            ep = np.random.randint(1,len(self.epochs.events))
+            epoch = self.epochs[ep]
+            evoked = epoch.average()
+            evoked.plot()
+
 
 if __name__ == "__main__":
     file = r"C:\Users\rohan\PycharmProjects\SPES_analysis\Testing\SPES1.edf"
     a = SPES_record(file)
+    a.exportAnnotatedEdf("Annotatedstims.edf")

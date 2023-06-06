@@ -1,4 +1,4 @@
-import SPES_detection as sd
+import SPES_analysis as sd
 import os
 import pandas as pd
 
@@ -14,7 +14,7 @@ def getDir(dir):
                 files.append(file)
     return files
 
-def FolderToDataframe(dir, includeWindows=False):
+def FolderToDataframe(dir, includeWindows=True):
     files = getDir(dir)
     folder_df = pd.DataFrame()
     for file in files:
@@ -34,7 +34,7 @@ def FolderToDataframe(dir, includeWindows=False):
     folder_df.to_csv("Output.csv")
     return folder_df
 
-def dataToDataframe(data, includeWindows = False, sfreq = 256):
+def dataToDataframe(data: dict, includeWindows: bool = True, sfreq = 256):
     N = len(data["responses"])
     M = len(data["responses"][0])
 
