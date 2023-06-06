@@ -190,6 +190,3 @@ class SPES_record():
 
 
 if __name__ == "__main__":
-    file = r"C:\Users\rohan\PycharmProjects\SPES_analysis\Testing\SPES1.edf"
-    a = SPES_record(file)
-    a.exportAnnotatedEdf("Annotatedstims.edf")
