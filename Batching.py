@@ -43,9 +43,11 @@ def dataToDataframe(data: dict, includeWindows: bool = True, sfreq = 256):
         df_data = {
             "sample": [data["sample"]] * N,
             "Bistim": [data["DoubleStim"]] * N,
-            "time": [data["sample"]] * N * sfreq,
+            "time": [data["sample"] * int(sfreq)] * N,
             "stimLeads": [data["stimLeads"]] * N,
+            "stimLeadNames": [data["stimLeadNames"]] * N,
             "polarity": [data["polarity"]] * N,
+            "lead": data["leads"],
             **{
                 f"response {i + 1}": [data["responses"][j][i] for j in range(N)] for i in range(M)
             },
@@ -61,8 +63,13 @@ def dataToDataframe(data: dict, includeWindows: bool = True, sfreq = 256):
     else:
         # Create a dictionary with the desired column names and values
         df_data = {
+            "sample": [data["sample"]] * N,
+            "Bistim": [data["DoubleStim"]] * N,
+            "time": [data["sample"] * int(sfreq)] * N,
             "stimLeads": [data["stimLeads"]] * N,
+            "stimLeadNames": [data["stimLeadNames"]] * N,
             "polarity": [data["polarity"]] * N,
+            "lead": data["leads"],
             "preStimFreq": data["preStimFreq"],
             "preStimPhase": data["preStimPhase"],
             "earlyResponseAmp": data["earlyResponseAmp"],
