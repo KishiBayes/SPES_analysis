@@ -6,25 +6,6 @@ from tqdm import tqdm
 import numpy as np
 import pywt
 
-def extract_induced_response(signal_before, signal_after, sampling_rate):
-    # Concatenate the two signals
-    signal = np.concatenate((signal_before, signal_after))
-
-    # Compute the CWT of the concatenated signal
-    coefficients, frequencies = pywt.cwt(signal, scales=np.arange(1, 100), wavelet='morl',
-                                         sampling_period=1 / sampling_rate)
-
-    # Calculate the power spectrum
-    power_spectrum = (np.abs(coefficients)) ** 2
-
-    # Split the power spectrum back into before and after segments
-    power_before = power_spectrum[:, :len(signal_before)]
-    power_after = power_spectrum[:, len(signal_before):]
-
-    # Calculate the induced response by subtracting the power before from the power after
-    induced_response = power_after - power_before
-
-    return frequencies, induced_response
 
 def fit_sine(time_series, sampling_rate, min_freq, max_freq):
     # Compute the Fast Fourier Transform (FFT) of the time series
@@ -76,6 +57,7 @@ def fit_exponential_curve(data):
 
 class SPES_record():
     def __init__(self, file):
+        self.startOffset = None
         self.file = file
         if self.file.endswith(".edf"):
             self.raw = mne.io.read_raw_edf(file, preload=True)
@@ -97,13 +79,12 @@ class SPES_record():
                                    windowSize=100, responseTime=0.2, phaseMeasureWindow=3,
                                    lowPass=4, highPass=0.005, startOffset=0.02, bistimDelayMax=2):
         # Get the data from all the channels
-
+        self.startOffset = startOffset
 
         data = self.raw.get_data()
         originalLeads = self.raw.ch_names
         self.n_chans = data.shape[0]
         self.n_samples = data.shape[1]
-
 
         peaks = self.detect_peaks()
 
@@ -126,7 +107,6 @@ class SPES_record():
             eventLabels.append(quietestLeadIndices)
 
         eventLabelSet = set(eventLabels)
-        print(f"{eventLabelSet} different stimulation setups detected.")
         self.eventLabelDict = {}
         for i, eventLabel in enumerate(eventLabelSet):
             self.eventLabelDict[i] = str(eventLabel)
@@ -158,21 +138,21 @@ class SPES_record():
                                                  arr=data[:, int(sample - phaseMeasureWindow * self.sfreq):sample - 1],
                                                  sampling_rate=self.sfreq, min_freq=highPass, max_freq=lowPass)
                 maxima = np.sqrt(
-                    np.max(np.square(data[:, sample:int(sample + startOffset * self.sfreq + responseTime * self.sfreq)]),
-                           axis=1))
+                    np.max(
+                        np.square(data[:, sample:int(sample + startOffset * self.sfreq + responseTime * self.sfreq)]),
+                        axis=1))
                 maximaIndex = np.argmax(
                     np.abs(data[:, sample:int(sample + startOffset * self.sfreq + responseTime * self.sfreq)]), axis=1)
             except ZeroDivisionError as z:
                 print(f"Error in fitting delta sine wave at sample {sample}, {z}")
-                maxima = np.zeros((1,self.n_chans))
+                maxima = np.zeros((1, self.n_chans))
                 maximaIndex = np.zeros((1, self.n_chans))
             self.eventData[i] = {"sample": sample,
                                  "stimLeads": quietestLeadIndices,
                                  "stimLeadNames": [self.raw.ch_names[j] for j in quietestLeadIndices],
                                  "polarity": np.sign(np.mean(data[: sample - 2, sample + 2])),
-                                 "responses": data[:, sample:int(
-                                     sample + startOffset * self.sfreq + responseTime * self.sfreq)],
-                                 # 0.005*sfreq to offset by "startOffset" from start of stimulus artefact.
+                                 "responses": data[:, sample:
+                                                      int(sample + startOffset * self.sfreq + responseTime * self.sfreq)],
                                  "preStimWindow": data[:, int(sample - phaseMeasureWindow * self.sfreq):sample - 1],
                                  "preStimFreq": fitResults[:, 0],
                                  "preStimPhase": fitResults[:, 1],
@@ -181,22 +161,30 @@ class SPES_record():
                                  "earlyResponseLatency": 1000 * (startOffset * self.sfreq + maximaIndex) / self.sfreq,
                                  "LikelyResponse": np.where(maximaIndex > 1, True, False)}
 
+
+        # Compute Induced Responses
+        for k, v in tqdm(self.eventData.items(), desc="Computing induced responses"):
+            # map self._inducedResponse to "_inducedData"
+            sample = v["sample"]
+            v["induced"], v["_responseFrequencies"] = self._inducedResponse(sample)
+
         # Detect bistim.
         for i, event in enumerate(self.events):
             if i != 0:
-                self.eventData[i]["DoubleStim"] = self.eventData[i]["sample"]-self.eventData[i-1]["sample"] < bistimDelayMax*self.sfreq
+                self.eventData[i]["DoubleStim"] = self.eventData[i]["sample"] - self.eventData[i - 1][
+                    "sample"] < bistimDelayMax * self.sfreq
 
-        for i, event in enumerate(self.events): # separate loop so it doesn't break it for the next guy.
-            if i<len(self.eventData.keys()):
-                if self.eventData[i]["sample"]-self.eventData[i+1]["sample"] < bistimDelayMax*self.sfreq:
-                    del(self.eventData[i])
+        for i, event in enumerate(self.events):  # separate loop so it doesn't break it for the next guy.
+            if i < len(self.eventData.keys()):
+                if self.eventData[i]["sample"] - self.eventData[i + 1]["sample"] < bistimDelayMax * self.sfreq:
+                    del (self.eventData[i])
 
     def getRelativeShifts(self):
         """
         1. Groupby stim leads and polarity
         2. Get the average response amplitude, response latency and average the response array
-        3. For each amp, latency and response array, subtract these averages
-        :return: self, but self.eventData[i] now has 3 new values: ["ampDeviation"], ["latDeviation"] and ["responseDifference"]
+        3. For each amp, latency and response array, induced responses, subtract these averages
+        :return: self, but self.eventData[i] now has 4 new values
         """
         grouped_events = {}
         for event_id, event in self.eventData.items():
@@ -210,35 +198,69 @@ class SPES_record():
         event_averages = {}
 
         for group_id, eventGroup in grouped_events.items():
-
             # Extract the arrays from the dictionaries
             boolArray = np.array([d["LikelyResponse"] for d in eventGroup])
             AmpArray = np.array([d["earlyResponseAmp"] for d in eventGroup])
             LatArray = np.array([d["earlyResponseLatency"] for d in eventGroup])
             ResponseArray = np.array([d["responses"] for d in eventGroup])
+            InducedArray = np.array([d["induced"] for d in eventGroup])
 
             # Compute the average of array values where boolArrays is True
             avAmps = np.mean(AmpArray[boolArray], axis=0)
             avLats = np.mean(LatArray[boolArray], axis=0)
             avResps = np.mean(ResponseArray[boolArray], axis=0)
-            event_averages[group_id] = {"meanAmps":avAmps, "meanLats":avLats, "meanResps":avResps}
+            avInduced = np.mean(InducedArray[boolArray], axis=0)
+            event_averages[group_id] = {"meanAmps": avAmps, "meanLats": avLats, "meanResps": avResps,
+                                        "meanInduced": avInduced}
 
         for event_id, event in self.eventData.items():
             stim_leads = event['stimLeads']
             polarity = event['polarity']
             group_key = (stim_leads, polarity)
             self.eventData[event_id].update(event_averages[group_key])
-            event_shifts = {"shiftAmps":(self.eventData[event_id]["earlyResponseAmp"] - self.eventData[event_id]["meanAmps"]),
-                                      "shiftLats":(self.eventData[event_id]["earlyResponseLatency"] - self.eventData[event_id]["meanLats"]),
-                                      "shiftResps":(self.eventData[event_id]["responses"] - self.eventData[event_id]["meanResps"])}
+            event_shifts = {
+                "shiftAmps": (self.eventData[event_id]["earlyResponseAmp"] - self.eventData[event_id]["meanAmps"]),
+                "shiftLats": (self.eventData[event_id]["earlyResponseLatency"] - self.eventData[event_id]["meanLats"]),
+                "shiftResps": (self.eventData[event_id]["responses"] - self.eventData[event_id]["meanResps"]),
+                "shiftInduced": (self.eventData[event_id]["induced"] - self.eventData[event_id]["meanInduced"])
+                }
             self.eventData[event_id].update(event_shifts)
 
+    def _inducedResponse(self, sample, window, sampling_rate=None):
+        if sampling_rate == None:
+            sampling_rate = self.sfreq
+        baselineData = self.data[:, int(sample - window * self.sfreq - 1):int(sample - 1)]
+        responseData = self.data[:, int(sample + self.startOffset * self.sfreq):
+                                    int(sample + self.startOffset * self.sfreq + window * self.sfreq)]
 
-    def getInducedResponses(self):
-        for k, v in tqdm(self.eventData.items()):
-            event = self.eventData[k]
-            event["inducedResponses"] = [extract_induced_response(signal_before=x,signal_after=y,sampling_rate=self.sfreq)
-                                         for x, y in zip(event["preStimWindow"],event["responses"])]
+        signal = self.data[:, int(sample - window * self.sfreq - 1):int(sample + self.startOffset * self.sfreq + window * self.sfreq)]
+
+        # Parameters for the wavelet transform
+        wavelet = 'morl'
+        scales = np.arange(1, 100)
+
+        # Define a function to apply the wavelet transform to a single row
+        def apply_wavelet_transform(row):
+            coefficients = pywt.cwt(row, scales, wavelet)[0]
+            frequencies = np.arange(len(coefficients))  # Assuming each scale corresponds to a unique frequency
+            power_spectrum = (np.abs(coefficients)) ** 2
+            # Split the power spectrum back into before and after segments
+            power_before = power_spectrum[:, :len(baselineData)]
+            power_after = power_spectrum[:, -len(responseData):]
+            induced_response = power_after - power_before
+            return {"coefficients": coefficients, "frequencies": frequencies, "power_spectrum": power_spectrum,
+                    "induced_response": induced_response}
+
+        result = [apply_wavelet_transform(row) for row in signal]
+
+        result_dict = {}
+        for dictionary in list_of_dicts:
+            for key, value in dictionary.items():
+                if key not in result_dict:
+                    result_dict[key] = []
+                result_dict[key].append(value)
+
+        return result_dict
 
     def exportAnnotatedEdf(self, output_path):
         annot_from_events = mne.annotations_from_events(
@@ -252,13 +274,12 @@ class SPES_record():
         # Save the modified Raw object as an EDF file
         mne.export.export_raw(output_path, raw=self.raw, overwrite=True)
 
-
-    def samplePlots(self,numberOfSamples = 6):
-        if numberOfSamples>len(self.epochs.events):
+    def samplePlots(self, numberOfSamples=6):
+        if numberOfSamples > len(self.epochs.events):
             return KeyError
 
         for i in range(numberOfSamples):
-            ep = np.random.randint(1,len(self.epochs.events))
+            ep = np.random.randint(1, len(self.epochs.events))
             epoch = self.epochs[ep]
             evoked = epoch.average()
             evoked.plot()
@@ -266,4 +287,3 @@ class SPES_record():
 
 if __name__ == "__main__":
     sr = SPES_record(r"C:\Users\rohan\PycharmProjects\SPES_analysis\Testing\SPES1.edf")
-    sr.getInducedResponses()
