@@ -76,7 +76,7 @@ class SPES_record():
             return sp(data, sfreq=self.sfreq)
 
     def analyse_stimulation_events(self, saveEpochs=False,
-                                   windowSize=100, responseTime=0.2, phaseMeasureWindow=3,
+                                   windowSize=100, responseTime=0.5, phaseMeasureWindow=3,
                                    lowPass=4, highPass=0.005, startOffset=0.02, bistimDelayMax=2):
         # Get the data from all the channels
         self.startOffset = startOffset
@@ -122,7 +122,7 @@ class SPES_record():
             EpochSaveName = str(self.file).split(".")[0] + "_epo.fif"
             self.epochs.save(fname=EpochSaveName, overwrite=True)
 
-        for i, event in enumerate(tqdm(self.events)):
+        for i, event in enumerate(tqdm(self.events, desc="Extracting event data...")):
             sample = event[0]
             window = self.data[:, sample - windowSize:sample + windowSize]
             eventAvs = np.mean(abs(window), axis=1)
@@ -166,7 +166,9 @@ class SPES_record():
         for k, v in tqdm(self.eventData.items(), desc="Computing induced responses"):
             # map self._inducedResponse to "_inducedData"
             sample = v["sample"]
-            v["induced"], v["_responseFrequencies"] = self._inducedResponse(sample)
+            inducedDict = self._inducedResponse(sample)
+            for resultType, resultArray in inducedDict.items():
+                v[resultType] = resultArray
 
         # Detect bistim.
         for i, event in enumerate(self.events):
@@ -203,7 +205,7 @@ class SPES_record():
             AmpArray = np.array([d["earlyResponseAmp"] for d in eventGroup])
             LatArray = np.array([d["earlyResponseLatency"] for d in eventGroup])
             ResponseArray = np.array([d["responses"] for d in eventGroup])
-            InducedArray = np.array([d["induced"] for d in eventGroup])
+            InducedArray = np.array([d["induced_response"] for d in eventGroup])
 
             # Compute the average of array values where boolArrays is True
             avAmps = np.mean(AmpArray[boolArray], axis=0)
@@ -222,11 +224,11 @@ class SPES_record():
                 "shiftAmps": (self.eventData[event_id]["earlyResponseAmp"] - self.eventData[event_id]["meanAmps"]),
                 "shiftLats": (self.eventData[event_id]["earlyResponseLatency"] - self.eventData[event_id]["meanLats"]),
                 "shiftResps": (self.eventData[event_id]["responses"] - self.eventData[event_id]["meanResps"]),
-                "shiftInduced": (self.eventData[event_id]["induced"] - self.eventData[event_id]["meanInduced"])
+                "shiftInduced": (self.eventData[event_id]["induced_response"] - self.eventData[event_id]["meanInduced"])
                 }
             self.eventData[event_id].update(event_shifts)
 
-    def _inducedResponse(self, sample, window, sampling_rate=None):
+    def _inducedResponse(self, sample, window=0.5, sampling_rate=None):
         if sampling_rate == None:
             sampling_rate = self.sfreq
         baselineData = self.data[:, int(sample - window * self.sfreq - 1):int(sample - 1)]
@@ -254,7 +256,7 @@ class SPES_record():
         result = [apply_wavelet_transform(row) for row in signal]
 
         result_dict = {}
-        for dictionary in list_of_dicts:
+        for dictionary in result:
             for key, value in dictionary.items():
                 if key not in result_dict:
                     result_dict[key] = []

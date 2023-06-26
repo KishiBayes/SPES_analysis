@@ -1,6 +1,7 @@
 import SPES_analysis as sd
 import os
 import pandas as pd
+import numpy as np
 
 def getDir(dir):
     files = []
@@ -14,7 +15,7 @@ def getDir(dir):
                 files.append(file)
     return files
 
-def FolderToDataframe(dir, includeWindows=True):
+def FolderToDataframe(dir, includeWindows=True, save=True):
     files = getDir(dir)
     folder_df = pd.DataFrame()
     for file in files:
@@ -31,12 +32,15 @@ def FolderToDataframe(dir, includeWindows=True):
         folder_df = pd.concat([folder_df, file_df])
     # Reset index
     folder_df = folder_df.reset_index(drop=True)
-    folder_df.to_csv("Output.csv")
+    if save:
+        folder_df.to_csv("Output.csv")
     return folder_df
 
-def dataToDataframe(data: dict, includeWindows: bool = True, sfreq = 256):
-    N = len(data["responses"])
-    M = len(data["responses"][0])
+def dataToDataframe(data: dict, includeWindows: bool = True, sfreq: int = 256):
+    N = len(data["responses"]) #N = number of leads
+    M = len(data["responses"][0]) #M = number of samples in "response" object
+    M_ind = len(data["induced_response"][0]) #M_ind = number of elements in induced response array
+    M_ind_E = len(data["shiftInduced"][0]) #M_ind_E = number of elements in induced response error array
 
     if includeWindows:
         # Create a dictionary with the desired column names and values
@@ -52,13 +56,24 @@ def dataToDataframe(data: dict, includeWindows: bool = True, sfreq = 256):
                 f"response {i + 1}": [data["responses"][j][i] for j in range(N)] for i in range(M)
             },
             **{
+                f"response error {i + 1}": [data["shiftResps"][j][i] for j in range(N)] for i in range(M)
+            },
+            **{
                 f"preStimWindow {i + 1}": [data["preStimWindow"][j][i] for j in range(N)] for i in range(M)
+            },
+            **{
+                f"Induced Response {i + 1}": [data["induced_response"][j][i] for j in range(N)] for i in range(M_ind)
+            },
+            **{
+                f"Induced Response Error {i + 1}": [data["shiftInduced"][j][i] for j in range(N)] for i in range(M_ind_E)
             },
             "preStimFreq": data["preStimFreq"],
             "preStimPhase": data["preStimPhase"],
             "earlyResponseAmp": data["earlyResponseAmp"],
             "earlyResponseLatency": data["earlyResponseLatency"],
-            "LikelyResponse": data["LikelyResponse"]
+            "LikelyResponse": data["LikelyResponse"],
+            "AmplitudeError": data["shiftAmps"],
+            "LatencyError": data["shiftLats"]
         }
     else:
         # Create a dictionary with the desired column names and values
@@ -74,7 +89,11 @@ def dataToDataframe(data: dict, includeWindows: bool = True, sfreq = 256):
             "preStimPhase": data["preStimPhase"],
             "earlyResponseAmp": data["earlyResponseAmp"],
             "earlyResponseLatency": data["earlyResponseLatency"],
-            "LikelyResponse": data["LikelyResponse"]
+            "LikelyResponse": data["LikelyResponse"],
+            "InducedResponse": data["induced_response"],
+            "AmplitudeError": data["shiftAmps"],
+            "LatencyError": data["shiftLats"],
+            "InducedResponseError": np.array(data["shiftInduced"])
         }
     return pd.DataFrame(df_data)
 
