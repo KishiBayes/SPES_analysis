@@ -37,26 +37,8 @@ def fit_sine(time_series, sampling_rate, min_freq, max_freq):
     return fitted_freq, phase
 
 
-def fit_exponential_curve(data):
-    x = np.array([i for i in range(len(data))])
-
-    # Define the exponential function to fit
-    def exponential_func(x, a, b, c):
-        return a * np.exp(-b * x) + c
-
-    # Fit the exponential curve
-    popt, _ = curve_fit(exponential_func, x, y)
-
-    # Generate y-values for the fitted curve
-    fitted_y = exponential_func(x, *popt)
-
-    corrected_y = y - fitted_y
-
-    return corrected_y
-
-
 class SPES_record():
-    def __init__(self, file):
+    def __init__(self, file, peak_detection_testing_mode=False):
         self.startOffset = None
         self.file = file
         if self.file.endswith(".edf"):
@@ -65,18 +47,24 @@ class SPES_record():
             print(f"Sampling frequency is {self.sfreq}, so resolution is {1 / self.sfreq}")
             self.data = self.raw.get_data()
             self.analyse_stimulation_events()
-            self.getRelativeShifts()
+            if not peak_detection_testing_mode:
+                self.getRelativeShifts()
+            if peak_detection_testing_mode:
+                self.exportAnnotatedEdf(output_path="Annotatedstims.edf")
 
     def detect_peaks(self, method=None):
         data = self.raw.get_data()
         from Peak_Detection import individual_peaks_mapped as ipm
         from Peak_Detection import summed_windowed_peaks as swp
         from Peak_Detection import summed_peaks as sp
+        from Peak_Detection import summed_peaks_simple as sps
         if method == None:
-            return sp(data, sfreq=self.sfreq)
+            return sps(data, sfreq=self.sfreq)
+        else:
+            return method(data, sfreq=self.sfreq)
 
-    def analyse_stimulation_events(self, saveEpochs=False,
-                                   windowSize=100, responseTime=0.5, phaseMeasureWindow=3,
+    def analyse_stimulation_events(self, saveEpochs: bool=False,
+                                   windowSize: int=100, responseTime=0.5, phaseMeasureWindow=3,
                                    lowPass=4, highPass=0.005, startOffset=0.02, bistimDelayMax=2):
         # Get the data from all the channels
         self.startOffset = startOffset
@@ -161,15 +149,6 @@ class SPES_record():
                                  "earlyResponseLatency": 1000 * (startOffset * self.sfreq + maximaIndex) / self.sfreq,
                                  "LikelyResponse": np.where(maximaIndex > 1, True, False)}
 
-
-        # Compute Induced Responses
-        for k, v in tqdm(self.eventData.items(), desc="Computing induced responses"):
-            # map self._inducedResponse to "_inducedData"
-            sample = v["sample"]
-            inducedDict = self._inducedResponse(sample)
-            for resultType, resultArray in inducedDict.items():
-                v[resultType] = resultArray
-
         # Detect bistim.
         for i, event in enumerate(self.events):
             if i != 0:
@@ -181,6 +160,13 @@ class SPES_record():
                 if self.eventData[i]["sample"] - self.eventData[i + 1]["sample"] < bistimDelayMax * self.sfreq:
                     del (self.eventData[i])
 
+        # Compute Induced Responses
+        for k, v in tqdm(self.eventData.items(), desc="Computing induced responses..."):
+            sample = v["sample"]
+            inducedDict = self._inducedResponse(sample)
+            for resultType, resultArray in inducedDict.items():
+                v[resultType] = resultArray
+
     def getRelativeShifts(self):
         """
         1. Groupby stim leads and polarity
@@ -189,7 +175,7 @@ class SPES_record():
         :return: self, but self.eventData[i] now has 4 new values
         """
         grouped_events = {}
-        for event_id, event in self.eventData.items():
+        for event_id, event in tqdm(self.eventData.items(), desc="Computing relative shifts..."):
             stim_leads = event['stimLeads']
             polarity = event['polarity']
             group_key = (stim_leads, polarity)
@@ -239,12 +225,14 @@ class SPES_record():
 
         # Parameters for the wavelet transform
         wavelet = 'morl'
-        scales = np.arange(1, 100)
+        frequencies = np.arange(0.5,20,0.5) / self.sfreq
+        scales = pywt.frequency2scale('cmor1.5-1.0', frequencies)
+        sampling_period = 1/self.sfreq
 
         # Define a function to apply the wavelet transform to a single row
         def apply_wavelet_transform(row):
             coefficients = pywt.cwt(row, scales, wavelet)[0]
-            frequencies = np.arange(len(coefficients))  # Assuming each scale corresponds to a unique frequency
+
             power_spectrum = (np.abs(coefficients)) ** 2
             # Split the power spectrum back into before and after segments
             power_before = power_spectrum[:, :len(baselineData)]
@@ -288,4 +276,6 @@ class SPES_record():
 
 
 if __name__ == "__main__":
-    sr = SPES_record(r"C:\Users\rohan\PycharmProjects\SPES_analysis\Testing\SPES1.edf")
+    sr = SPES_record(r"C:\Users\rohan\PycharmProjects\SPES_analysis\Testing\SPES1.edf",
+                     peak_detection_testing_mode=True)
+

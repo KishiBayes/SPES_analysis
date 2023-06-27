@@ -30,10 +30,11 @@ def FolderToDataframe(dir, includeWindows=True, save=True):
             file_df = pd.concat([file_df, eventdf])
         file_df = file_df.reset_index(drop=True)
         folder_df = pd.concat([folder_df, file_df])
-    # Reset index
-    folder_df = folder_df.reset_index(drop=True)
-    if save:
-        folder_df.to_csv("Output.csv")
+        # Reset index
+        folder_df = folder_df.reset_index(drop=True)
+        if save:
+            print("Saving to pickle")
+            folder_df.to_pickle("Output.pkl")
     return folder_df
 
 def dataToDataframe(data: dict, includeWindows: bool = True, sfreq: int = 256):
@@ -62,10 +63,13 @@ def dataToDataframe(data: dict, includeWindows: bool = True, sfreq: int = 256):
                 f"preStimWindow {i + 1}": [data["preStimWindow"][j][i] for j in range(N)] for i in range(M)
             },
             **{
-                f"Induced Response {i + 1}": [data["induced_response"][j][i] for j in range(N)] for i in range(M_ind)
+                "Induced Response":[data["induced_response"][j] for j in range(N)],
             },
             **{
-                f"Induced Response Error {i + 1}": [data["shiftInduced"][j][i] for j in range(N)] for i in range(M_ind_E)
+                "Induced Response Error":[data["shiftInduced"][j] for j in range(N)],
+            },
+            **{
+                "Induced Response Frequencies": [data["frequencies"][j] for j in range(N)],
             },
             "preStimFreq": data["preStimFreq"],
             "preStimPhase": data["preStimPhase"],
@@ -90,13 +94,15 @@ def dataToDataframe(data: dict, includeWindows: bool = True, sfreq: int = 256):
             "earlyResponseAmp": data["earlyResponseAmp"],
             "earlyResponseLatency": data["earlyResponseLatency"],
             "LikelyResponse": data["LikelyResponse"],
-            "InducedResponse": data["induced_response"],
             "AmplitudeError": data["shiftAmps"],
-            "LatencyError": data["shiftLats"],
-            "InducedResponseError": np.array(data["shiftInduced"])
+            "LatencyError": data["shiftLats"]
         }
     return pd.DataFrame(df_data)
 
 if __name__ == "__main__":
     dir = r"C:\Users\rohan\PycharmProjects\SPES_analysis\Testing"
     df = FolderToDataframe(dir)
+
+    import Statistics_and_plotting as SaP
+
+    SaP.split_by_phase(df)

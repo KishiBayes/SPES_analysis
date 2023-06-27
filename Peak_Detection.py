@@ -10,7 +10,7 @@ import mne
 import tqdm
 import numpy as np
 
-def summed_peaks(data, thresholdRatio=15, proxMin=0.5, sfreq=256):
+def summed_peaks(data, thresholdRatio=15, proxMin=0.1, sfreq=256):
 
     # THIS IS THE OLD METHOD
     # Compute the sum of all channels along the channel axis
@@ -28,8 +28,30 @@ def summed_peaks(data, thresholdRatio=15, proxMin=0.5, sfreq=256):
         else:
             fixed_sum_data_step.append(digit)
     peaks = np.array(np.reshape(np.array(fixed_sum_data_step), (1, len(fixed_sum_data_step))))
-    print(peaks)
-    print(np.sum(peaks))
+    return peaks
+
+def summed_peaks_simple(data, thresholdRatio=15, proxMin=0.1, sfreq=256):
+
+    # THIS IS THE OLD METHOD
+    # Compute the sum of all channels along the channel axis
+    sum_data_OneD = np.sum(np.abs(data), axis=0)
+    sum_data = np.reshape(sum_data_OneD, (1, len(sum_data_OneD)))
+
+    # Apply a step function to the summed data
+    threshold = thresholdRatio * np.std(sum_data_OneD) + np.mean(sum_data_OneD)
+    print(f"Threshold for stim channel set at {threshold}")
+    peaks = np.where(sum_data >= threshold, 1, 0).flatten()
+
+    N = int(proxMin * sfreq)
+    for i in range(N, len(peaks)):
+        if 1 in peaks[i - N:i]:
+            peaks[i] = 0
+    for i in range(N):
+        if peaks[i] == 1:
+            peaks[i] = 0
+
+    peaks = np.array(np.reshape(np.array(peaks), (1, len(peaks))))
+    print(f"There are {np.sum(peaks)} peaks, before removal of paired stimulation")
     return peaks
 
 def summed_windowed_peaks(data, thresholdRatio=30, sfreq=256,
