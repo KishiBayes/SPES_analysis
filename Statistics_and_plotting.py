@@ -54,9 +54,11 @@ def plot_box_and_whisker(arrays, labels=None, Variable=None):
     # Show the plot
     plt.show()
 
-def split_by_phase(df, removeUnlikely = True, shift=True, offset=0):
+def split_by_phase(df, removeUnlikely = True, removeBistim = True, shift=True, offset=0):
     if removeUnlikely:
         df = df[df["LikelyResponse"]==True]
+    if removeBistim:
+        df = df[df["Bistim"]==False]
     posDf = df[df["preStimPhase"] > 0+offset]
     negDf = df[df["preStimPhase"] < 0-offset]
     if shift:

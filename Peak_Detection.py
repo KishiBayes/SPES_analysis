@@ -105,7 +105,6 @@ def individual_peak_loops(raw, thresholdRatio=5, saveEpochs=False,
 
 def individual_peaks_mapped(data, thresholdRatio=20, sfreq=256,
                                    windowSize=256, proxMin=0.5):
-
     n_chans = data.shape[0]
     n_samples = data.shape[1]
     stacked_rows = np.zeros((n_chans,n_samples - windowSize))
