@@ -54,13 +54,20 @@ def plot_box_and_whisker(arrays, labels=None, Variable=None):
     # Show the plot
     plt.show()
 
-def split_by_phase(df, removeUnlikely = True, removeBistim = True, shift=True, offset=0):
+def IR_by_phase(df, removeUnlikely = True, removeBistim = True, shift=True, offset=0, Hilbert=False):
     if removeUnlikely:
         df = df[df["LikelyResponse"]==True]
     if removeBistim:
-        df = df[df["Bistim"]==False]
-    posDf = df[df["preStimPhase"] > 0+offset]
-    negDf = df[df["preStimPhase"] < 0-offset]
+        df = df[df["FirstOfTwoStims"]==False]
+        df = df[df["SecondOfTwoStims"]==False]
+
+    if Hilbert:
+        posDf = df[df["Hilbert Phase"][-2] > 0 + offset]
+        negDf = df[df["Hilbert Phase"][-2] < 0 - offset]
+    else:
+        posDf = df[df["preStimPhase"] > 0+offset]
+        negDf = df[df["preStimPhase"] < 0-offset]
+
     if shift:
         posIRs = posDf["Induced Response Error"]
         negIRs = negDf["Induced Response Error"]
@@ -69,7 +76,7 @@ def split_by_phase(df, removeUnlikely = True, removeBistim = True, shift=True, o
         negIRs = negDf["Induced Response"]
 
     print(f"There are {len(posIRs)} positive phase responses, and {len(negIRs)} negative phase responses")
-    frequencies = np.arange(0.5,20,0.5)
+    frequencies = np.arange(0.2,20,0.2)
 
     posIRs_3d = np.stack(posIRs.values)
     average_posIR = np.mean(posIRs_3d, axis=0)
@@ -79,15 +86,65 @@ def split_by_phase(df, removeUnlikely = True, removeBistim = True, shift=True, o
 
     plot_induced_responses(induced_response1=average_posIR, induced_response2=average_negIR, label1="Positive Phase", label2="Negative Phase", sampling_rate=256, frequencies=frequencies)
 
-    posEvAmps = posDf["LatencyError"]
-    negEvAmps = negDf["LatencyError"]
+def PlotEvoked(df, removeUnlikely = True, flipByPolarity=False, splitBy = "Hilbert", removeBistim = True, sfreq = 256, offset=0):
+    if removeUnlikely:
+        df = df[df["LikelyResponse"]==True]
 
-    AmpArrays = [list(posEvAmps),list(negEvAmps)]
-    labels = ["Positive Phase","Negative Phase"]
+    if False:
+        df = df[~df["preStimWindow"].apply(lambda arr: np.max(np.abs(arr)) > 0.0002)]
 
-    plot_box_and_whisker(AmpArrays,labels=labels, Variable="Amplitude Shift")
+    if removeBistim:
+        df = df[df["FirstOfTwoStims"] == False]
+        df = df[df["SecondOfTwoStims"] == False]
+
+    print(np.sum(df["FirstOfTwoStims"]))
+
+    if flipByPolarity:
+        df.loc[df['polarity'] < 0, 'response'] = -df.loc[df['polarity'] < 0, 'response']
+
+    if splitBy=="Hilbert":
+        posDf = df[df["Hilbert Phase"][-2] > 0 + offset]
+        negDf = df[df["Hilbert Phase"][-2] < 0 - offset]
+    elif splitBy=="Phase":
+        posDf = df[df["preStimPhase"] > 0 + offset]
+        negDf = df[df["preStimPhase"] < 0 - offset]
+
+    #Group By stimLeads and lead, and by polarity if not flipped
+    if flipByPolarity:
+        pos_averaged_df = posDf.groupby(['stimLeads', 'lead'])['response'].apply(np.mean).reset_index()
+        neg_averaged_df = negDf.groupby(['stimLeads', 'lead'])['response'].apply(np.mean).reset_index()
+    else:
+        pos_averaged_df = posDf.groupby(['stimLeads', 'lead', 'polarity'])['response'].apply(np.mean).reset_index()
+        neg_averaged_df = negDf.groupby(['stimLeads', 'lead', 'polarity'])['response'].apply(np.mean).reset_index()
+
+    # Create a figure and axes for the plot
+    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(8, 6))
+
+    # Plot for column1
+    for time_series in pos_averaged_df["response"]:
+        time = np.arange(len(time_series))  # Generate time values
+        ax1.plot(time, time_series)
+
+    ax1.set_xlabel("Time")
+    ax1.set_ylabel("Amplitude")
+    ax1.set_title("Positive Phase")
+
+    # Plot for column2
+    for time_series in neg_averaged_df["response"]:
+        time = np.arange(len(time_series))  # Generate time values
+        ax2.plot(time, time_series)
+
+    ax2.set_xlabel("Time")
+    ax2.set_ylabel("Amplitude")
+    ax2.set_title("Negative Phase")
+
+    # Adjust spacing between subplots
+    plt.tight_layout()
+
+    # Display the plot
+    plt.show()
 
 
 if __name__ == "__main__":
     df = pd.read_pickle(r"C:\Users\rohan\PycharmProjects\SPES_analysis\Output.pkl")
-    split_by_phase(df=df, shift=False)
+    PlotEvoked(df=df, splitBy="Phase", removeBistim=False, flipByPolarity=False, removeUnlikely=False)

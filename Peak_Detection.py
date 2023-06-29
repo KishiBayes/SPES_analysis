@@ -30,7 +30,7 @@ def summed_peaks(data, thresholdRatio=15, proxMin=0.1, sfreq=256):
     peaks = np.array(np.reshape(np.array(fixed_sum_data_step), (1, len(fixed_sum_data_step))))
     return peaks
 
-def summed_peaks_simple(data, thresholdRatio=15, proxMin=0.1, sfreq=256):
+def summed_peaks_simple(data, thresholdRatio=11, proxMin=0.1, sfreq=256):
 
     # THIS IS THE OLD METHOD
     # Compute the sum of all channels along the channel axis

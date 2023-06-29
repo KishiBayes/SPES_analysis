@@ -1,7 +1,7 @@
 import mne
 from scipy.fft import fft, fftfreq
 from scipy.optimize import curve_fit
-import matplotlib.pyplot as plt
+from scipy.signal import hilbert
 from tqdm import tqdm
 import numpy as np
 import pywt
@@ -63,9 +63,10 @@ class SPES_record():
         else:
             return method(data, sfreq=self.sfreq)
 
-    def analyse_stimulation_events(self, saveEpochs: bool=False,
-                                   windowSize: int=100, responseTime=0.5, phaseMeasureWindow=3,
-                                   lowPass=4, highPass=0.005, startOffset=0.02, bistimDelayMax=2):
+    def analyse_stimulation_events(self, saveEpochs: bool = False,
+                                   windowSize: int = 100, responseTime=0.5, phaseMeasureWindow=3,
+                                   lowPass=4, highPass=0.005, startOffset=0.02, bistimDelayMax=2,
+                                   artefactThreshold=0.0005):
         # Get the data from all the channels
         self.startOffset = startOffset
 
@@ -139,8 +140,8 @@ class SPES_record():
                                  "stimLeads": quietestLeadIndices,
                                  "stimLeadNames": [self.raw.ch_names[j] for j in quietestLeadIndices],
                                  "polarity": np.sign(np.mean(data[: sample - 2, sample + 2])),
-                                 "responses": data[:, sample:
-                                                      int(sample + startOffset * self.sfreq + responseTime * self.sfreq)],
+                                 "responses": data[:, sample-50:
+                                                      int(sample + responseTime * self.sfreq)],
                                  "preStimWindow": data[:, int(sample - phaseMeasureWindow * self.sfreq):sample - 1],
                                  "preStimFreq": fitResults[:, 0],
                                  "preStimPhase": fitResults[:, 1],
@@ -152,13 +153,34 @@ class SPES_record():
         # Detect bistim.
         for i, event in enumerate(self.events):
             if i != 0:
-                self.eventData[i]["DoubleStim"] = self.eventData[i]["sample"] - self.eventData[i - 1][
+                self.eventData[i]["SecondOfTwoStims"] = self.eventData[i]["sample"] - self.eventData[i - 1][
                     "sample"] < bistimDelayMax * self.sfreq
+            else:
+                self.eventData[i]["SecondOfTwoStims"] = False
+            if i < len(self.events)-1:
+                self.eventData[i]["FirstOfTwoStims"] = self.eventData[i + 1]["sample"] - self.eventData[i][
+                    "sample"] < bistimDelayMax * self.sfreq
+            else:
+                self.eventData[i]["FirstOfTwoStims"] = False
 
+        # Remove First of each Bistim pair
+        removed=0
         for i, event in enumerate(self.events):  # separate loop so it doesn't break it for the next guy.
             if i < len(self.eventData.keys()):
-                if self.eventData[i]["sample"] - self.eventData[i + 1]["sample"] < bistimDelayMax * self.sfreq:
+                if self.eventData[i+1]["sample"] - self.eventData[i]["sample"] < bistimDelayMax * self.sfreq:
+                    if self.eventData[i]["SecondOfTwoStims"] or not self.eventData[i]["FirstOfTwoStims"]:
+                        print(f"Possible error with Bistim detection on event {i}")
+                    removed+=1
                     del (self.eventData[i])
+
+        # Remove non-Bistim events with amplitude above threshold in preStim window
+        for i, event in enumerate(self.events):
+            if i in self.eventData.keys():
+                s = self.eventData[i]["sample"]
+                if np.max(np.abs(self.data[:,int(s-self.sfreq*1):int(s-1)])) > artefactThreshold and not self.eventData[i]["SecondOfTwoStims"]:
+                    removed+=1
+                    del (self.eventData[i])
+        print(f"\n{removed} Events deleted")
 
         # Compute Induced Responses
         for k, v in tqdm(self.eventData.items(), desc="Computing induced responses..."):
@@ -166,6 +188,10 @@ class SPES_record():
             inducedDict = self._inducedResponse(sample)
             for resultType, resultArray in inducedDict.items():
                 v[resultType] = resultArray
+        #Hilbert transforms of pre-stim windows
+        for k, v in tqdm(self.eventData.items(), desc="Computing Hilbert Transforms..."):
+            sample = v["sample"]
+            v["HilbertEnvelope"], v["HilbertPhase"] = self._hilbert_map(sample=sample)
 
     def getRelativeShifts(self):
         """
@@ -211,7 +237,7 @@ class SPES_record():
                 "shiftLats": (self.eventData[event_id]["earlyResponseLatency"] - self.eventData[event_id]["meanLats"]),
                 "shiftResps": (self.eventData[event_id]["responses"] - self.eventData[event_id]["meanResps"]),
                 "shiftInduced": (self.eventData[event_id]["induced_response"] - self.eventData[event_id]["meanInduced"])
-                }
+            }
             self.eventData[event_id].update(event_shifts)
 
     def _inducedResponse(self, sample, window=0.5, sampling_rate=None):
@@ -221,13 +247,14 @@ class SPES_record():
         responseData = self.data[:, int(sample + self.startOffset * self.sfreq):
                                     int(sample + self.startOffset * self.sfreq + window * self.sfreq)]
 
-        signal = self.data[:, int(sample - window * self.sfreq - 1):int(sample + self.startOffset * self.sfreq + window * self.sfreq)]
+        signal = self.data[:, int(sample - window * self.sfreq - 1):int(
+            sample + self.startOffset * self.sfreq + window * self.sfreq)]
 
         # Parameters for the wavelet transform
         wavelet = 'morl'
-        frequencies = np.arange(0.5,20,0.5) / self.sfreq
+        frequencies = np.arange(0.1, 10, 0.5) / self.sfreq
         scales = pywt.frequency2scale('cmor1.5-1.0', frequencies)
-        sampling_period = 1/self.sfreq
+        sampling_period = 1 / self.sfreq
 
         # Define a function to apply the wavelet transform to a single row
         def apply_wavelet_transform(row):
@@ -251,6 +278,22 @@ class SPES_record():
                 result_dict[key].append(value)
 
         return result_dict
+
+    def _hilbert_map(self, sample, window=1):
+        preStimData = self.data[:, int(sample - window * self.sfreq - 1):int(sample - 1)]
+
+        def _hilbert(time_series):
+            analytic_signal = hilbert(time_series)
+            amplitude_envelope = np.abs(analytic_signal)
+            instantaneous_phase = np.unwrap(np.angle(analytic_signal))
+            return amplitude_envelope, instantaneous_phase
+
+        output = np.apply_along_axis(_hilbert, axis=1, arr=preStimData)
+
+        amplitudes = output[:, 0]
+        phases = output[:, 1]
+
+        return amplitudes, phases
 
     def exportAnnotatedEdf(self, output_path):
         annot_from_events = mne.annotations_from_events(
@@ -278,4 +321,3 @@ class SPES_record():
 if __name__ == "__main__":
     sr = SPES_record(r"C:\Users\rohan\PycharmProjects\SPES_analysis\Testing\SPES1.edf",
                      peak_detection_testing_mode=True)
-
